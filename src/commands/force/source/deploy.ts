@@ -7,7 +7,7 @@
 import * as os from 'os';
 import { flags, FlagsConfig } from '@salesforce/command';
 import { Messages, SfdxError } from '@salesforce/core';
-import { AsyncResult, DeployResult } from '@salesforce/source-deploy-retrieve';
+import { AsyncResult, DeployResult, MetadataResolver } from '@salesforce/source-deploy-retrieve';
 import { Duration } from '@salesforce/kit';
 import { getString, isString } from '@salesforce/ts-types';
 import { env, once } from '@salesforce/kit';
@@ -99,6 +99,10 @@ export class Deploy extends DeployCommand {
       description: messages.getMessage('flags.manifest'),
       exclusive: ['metadata', 'sourcepath'],
     }),
+    asdelete: flags.boolean({
+      char: 'd',
+      description: 'set this if you want these files deleted',
+    }),
   };
   protected readonly lifecycleEventNames = ['predeploy', 'postdeploy'];
 
@@ -147,9 +151,15 @@ export class Deploy extends DeployCommand {
           metadataEntries: this.getFlag<string[]>('metadata'),
           directoryPaths: this.getPackageDirs(),
         },
+        asDestructiveChanges: this.getFlag<boolean>('asdelete'),
       });
       // fire predeploy event for sync and async deploys
       await this.lifecycle.emit('predeploy', this.componentSet.toArray());
+
+      const resolver = new MetadataResolver();
+      const fsPath = 'force-app/main/default/classes/MyApexClass3.cls';
+      const component = resolver.getComponentsFromPath(fsPath);
+      this.componentSet.add(component[0]);
 
       const deploy = await this.componentSet.deploy({
         usernameOrConnection: this.org.getUsername(),

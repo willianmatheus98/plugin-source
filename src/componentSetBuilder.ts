@@ -5,10 +5,8 @@
  * For full license text, see LICENSE.txt file in the repo root or https://opensource.org/licenses/BSD-3-Clause
  */
 
-import * as path from 'path';
 import { ComponentSet, RegistryAccess } from '@salesforce/source-deploy-retrieve';
-import { ComponentLike } from '@salesforce/source-deploy-retrieve/lib/src/resolve/types';
-import { fs, SfdxError, Logger } from '@salesforce/core';
+import { SfdxError, Logger } from '@salesforce/core';
 
 export type ManifestOption = {
   manifestPath: string;
@@ -25,6 +23,7 @@ export type ComponentSetOptions = {
   metadata?: MetadataOption;
   apiversion?: string;
   sourceapiversion?: string;
+  asDestructiveChanges?: boolean;
 };
 
 export class ComponentSetBuilder {
@@ -38,25 +37,38 @@ export class ComponentSetBuilder {
    */
   public static async build(options: ComponentSetOptions): Promise<ComponentSet> {
     const logger = Logger.childFromRoot('createComponentSet');
-    const csAggregator: ComponentLike[] = [];
+    // const csAggregator: ComponentLike[] = [];
+    let componentSet: ComponentSet;
 
-    const { sourcepath, manifest, metadata, packagenames, apiversion, sourceapiversion } = options;
+    const { sourcepath, manifest, metadata, packagenames, apiversion, sourceapiversion, asDestructiveChanges } =
+      options;
     try {
+      const destructiveChangesMsg = asDestructiveChanges ? 'with destructive changes ' : '';
       if (sourcepath) {
-        logger.debug(`Building ComponentSet from sourcepath: ${sourcepath.toString()}`);
-        sourcepath.forEach((filepath) => {
-          if (fs.fileExistsSync(filepath)) {
-            csAggregator.push(...ComponentSet.fromSource(path.resolve(filepath)));
-          } else {
-            throw new SfdxError(`The sourcepath "${filepath}" is not a valid source file path.`);
-          }
+        logger.debug(`Building ComponentSet ${destructiveChangesMsg}from sourcepath: ${sourcepath.toString()}`);
+        componentSet = ComponentSet.fromSource({
+          fsPaths: asDestructiveChanges ? [] : sourcepath,
+          fsDeletePaths: asDestructiveChanges ? sourcepath : [],
         });
+
+        // sourcepath.forEach((filepath) => {
+        //   if (fs.fileExistsSync(filepath)) {
+        //     csAggregator.push(
+        //       ...ComponentSet.fromSource({
+        //         fsPaths: [path.resolve(filepath)],
+        //         asDeletion: asDestructiveChanges,
+        //       })
+        //     );
+        //   } else {
+        //     throw new SfdxError(`The sourcepath "${filepath}" is not a valid source file path.`);
+        //   }
+        // });
       }
 
       // Return empty ComponentSet and use packageNames in the library via `.retrieve` options
       if (packagenames) {
         logger.debug(`Building ComponentSet for packagenames: ${packagenames.toString()}`);
-        csAggregator.push(...new ComponentSet([]));
+        componentSet ??= new ComponentSet();
       }
 
       // Resolve manifest with source in package directories.
@@ -64,27 +76,28 @@ export class ComponentSetBuilder {
         logger.debug(`Building ComponentSet from manifest: ${manifest.manifestPath}`);
         const directoryPaths = options.manifest.directoryPaths;
         logger.debug(`Searching in packageDir: ${directoryPaths.join(', ')} for matching metadata`);
-        const compSet = await ComponentSet.fromManifest({
+        componentSet = await ComponentSet.fromManifest({
           manifestPath: manifest.manifestPath,
           resolveSourcePaths: options.manifest.directoryPaths,
           forceAddWildcards: true,
         });
-        csAggregator.push(...compSet);
       }
 
       // Resolve metadata entries with source in package directories.
       if (metadata) {
-        logger.debug(`Building ComponentSet from metadata: ${metadata.metadataEntries.toString()}`);
+        logger.debug(
+          `Building ComponentSet ${destructiveChangesMsg}from metadata: ${metadata.metadataEntries.toString()}`
+        );
         const registry = new RegistryAccess();
 
         // Build a Set of metadata entries
-        const filter = new ComponentSet();
+        const compSetFilter = new ComponentSet();
         metadata.metadataEntries.forEach((entry) => {
           const splitEntry = entry.split(':');
           // try and get the type by name to ensure no typos or errors in type name
           // matches toolbelt functionality
           registry.getTypeByName(splitEntry[0]);
-          filter.add({
+          compSetFilter.add({
             type: splitEntry[0],
             fullName: splitEntry.length === 1 ? '*' : splitEntry[1],
           });
@@ -92,10 +105,13 @@ export class ComponentSetBuilder {
 
         const directoryPaths = options.metadata.directoryPaths;
         logger.debug(`Searching for matching metadata in directories: ${directoryPaths.join(', ')}`);
-        const fromSource = ComponentSet.fromSource({ fsPaths: directoryPaths, include: filter });
+        const fromSource = ComponentSet.fromSource({
+          fsPaths: asDestructiveChanges ? [] : directoryPaths,
+          include: compSetFilter,
+          fsDeletePaths: asDestructiveChanges ? directoryPaths : [],
+        });
         // If no matching metadata is found, default to the original component set
-        const finalized = fromSource.size > 0 ? fromSource : filter;
-        csAggregator.push(...finalized);
+        componentSet = fromSource.size > 0 ? fromSource : compSetFilter;
       }
     } catch (e) {
       if ((e as Error).message.includes('Missing metadata type definition in registry for id')) {
@@ -107,8 +123,6 @@ export class ComponentSetBuilder {
         throw e;
       }
     }
-
-    const componentSet = new ComponentSet(csAggregator);
 
     // This is only for debug output of matched files based on the command flags.
     // It will log up to 20 file matches.
