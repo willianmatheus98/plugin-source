@@ -13,6 +13,8 @@ import {
   CodeCoverage,
   DeployMessage,
   DeployResult,
+  RunTestResult,
+  CodeCoverageWarnings,
   FileResponse,
   MetadataApiDeployStatus,
   RequestStatus,
@@ -148,7 +150,7 @@ export class DeployResultFormatter extends ResultFormatter {
 
   protected displayFailures(): void {
     if (this.hasStatus(RequestStatus.Failed) || this.hasStatus(RequestStatus.SucceededPartial)) {
-      const failures: Array<FileResponse | DeployMessage> = [];
+      const failures: Array<FileResponse | DeployMessage | RunTestResult | CodeCoverageWarnings> = [];
       const fileResponseFailures: Map<string, string> = new Map<string, string>();
 
       if (this.fileResponses?.length) {
@@ -172,6 +174,37 @@ export class DeployResultFormatter extends ResultFormatter {
             // duplicate the problem message to the error property for displaying in the table
             failures.push(Object.assign(deployMessage, { error: deployMessage.problem }));
           }
+        });
+      }
+
+      const codeCoverageWarnings = toArray(this.result?.response?.details?.runTestResult?.codeCoverageWarnings);
+      if (codeCoverageWarnings.length > 0) {
+        // if there's code coverage warning, they will be reported too
+        codeCoverageWarnings.map((coverageWarning) => {
+          // assign the warnings of coverage
+          failures.push(
+            Object.assign(coverageWarning, {
+              fullName: coverageWarning.name,
+              error: coverageWarning.message,
+              problemType: 'Error',
+            })
+          );
+        });
+      }
+
+      const runTestResultfailures = toArray(this.result?.response?.details?.runTestResult?.failures);
+      if (runTestResultfailures.length > 0) {
+        // if there's test failures, they will be reported too
+        runTestResultfailures.map((failureTest) => {
+          const fullName = `${failureTest.name}.${failureTest.methodName}`; // Class.methodName
+          // assign the property
+          failures.push(
+            Object.assign(failureTest, {
+              fullName,
+              error: failureTest.message,
+              problemType: 'Error',
+            })
+          );
         });
       }
 
